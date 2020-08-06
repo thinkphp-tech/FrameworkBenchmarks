@@ -12,13 +12,12 @@ use ntex::http::header::{HeaderValue, CONTENT_TYPE, SERVER};
 use ntex::http::{HttpService, KeepAlive, Request, Response, StatusCode};
 use ntex::service::{Service, ServiceFactory};
 use ntex::web::Error;
-use simd_json_derive::Serialize;
+use yarte::Serialize;
 
 mod db;
 mod utils;
 
 use crate::db::PgConnection;
-use crate::utils::Writer;
 
 struct App {
     db: PgConnection,
@@ -55,7 +54,7 @@ impl Service for App {
                     Ok(res)
                 })
             }
-            "/fortune" => {
+            "/fortunes" => {
                 let h_srv = self.hdr_srv.clone();
                 let h_ct = self.hdr_cthtml.clone();
                 let fut = self.db.tell_fortune();
@@ -77,10 +76,11 @@ impl Service for App {
 
                 Box::pin(async move {
                     let worlds = fut.await?;
-                    let mut body = BytesMut::with_capacity(35 * worlds.len());
-                    worlds.json_write(&mut Writer(&mut body)).unwrap();
-                    let mut res =
-                        Response::with_body(StatusCode::OK, Body::Bytes(body.freeze()));
+                    let size = 35 * worlds.len();
+                    let mut res = Response::with_body(
+                        StatusCode::OK,
+                        Body::Bytes(worlds.to_bytes::<BytesMut>(size)),
+                    );
                     let hdrs = res.headers_mut();
                     hdrs.insert(SERVER, h_srv);
                     hdrs.insert(CONTENT_TYPE, h_ct);
@@ -95,10 +95,11 @@ impl Service for App {
 
                 Box::pin(async move {
                     let worlds = fut.await?;
-                    let mut body = BytesMut::with_capacity(35 * worlds.len());
-                    worlds.json_write(&mut Writer(&mut body)).unwrap();
-                    let mut res =
-                        Response::with_body(StatusCode::OK, Body::Bytes(body.freeze()));
+                    let size = 35 * worlds.len();
+                    let mut res = Response::with_body(
+                        StatusCode::OK,
+                        Body::Bytes(worlds.to_bytes::<BytesMut>(size)),
+                    );
                     let hdrs = res.headers_mut();
                     hdrs.insert(SERVER, h_srv);
                     hdrs.insert(CONTENT_TYPE, h_ct);

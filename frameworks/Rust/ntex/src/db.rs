@@ -1,18 +1,17 @@
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fmt::Write as FmtWrite;
-use std::io::{self, Write};
+use std::io;
 
 use bytes::{Bytes, BytesMut};
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::{Future, FutureExt, StreamExt, TryStreamExt};
 use ntex::web::Error;
 use random_fast_rng::{FastRng, Random};
-use simd_json_derive::Serialize;
-use smallvec::{smallvec, SmallVec};
+use smallvec::SmallVec;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{connect, Client, NoTls, Statement};
-
-use crate::utils::Writer;
+use yarte::{ywrite_html, Serialize};
 
 #[derive(Serialize, Debug)]
 pub struct World {
@@ -21,15 +20,9 @@ pub struct World {
 }
 
 #[derive(serde::Serialize, Debug)]
-pub struct Fortune<'a> {
+pub struct Fortune {
     pub id: i32,
-    pub message: &'a str,
-}
-
-#[derive(yarte::Template)]
-#[template(path = "fortune.hbs")]
-pub struct FortunesTemplate<'a> {
-    pub fortunes: &'a [Fortune<'a>],
+    pub message: Cow<'static, str>,
 }
 
 /// Postgres interface
@@ -89,15 +82,11 @@ impl PgConnection {
                 Error::from(io::Error::new(io::ErrorKind::Other, format!("{:?}", e)))
             })?;
 
-            let mut body = BytesMut::with_capacity(40);
-            World {
+            Ok(World {
                 id: row.get(0),
                 randomnumber: row.get(1),
             }
-            .json_write(&mut Writer(&mut body))
-            .unwrap();
-
-            Ok(body.freeze())
+            .to_bytes::<BytesMut>(40))
         }
     }
 
@@ -182,30 +171,27 @@ impl PgConnection {
                 .await
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{:?}", e)))?;
 
-            let mut rows = SmallVec::<[_; 32]>::new();
+            let mut fortunes: SmallVec<[_; 32]> = smallvec::smallvec![Fortune {
+                id: 0,
+                message: Cow::Borrowed("Additional fortune added at request time."),
+            }];
+
             while let Some(row) = stream.next().await {
                 let row = row.map_err(|e| {
                     io::Error::new(io::ErrorKind::Other, format!("{:?}", e))
                 })?;
-                rows.push(row);
-            }
-
-            let mut items: SmallVec<[_; 32]> = smallvec::smallvec![Fortune {
-                id: 0,
-                message: "Additional fortune added at request time.",
-            }];
-            for row in &rows {
-                items.push(Fortune {
+                fortunes.push(Fortune {
                     id: row.get(0),
-                    message: row.get(1),
+                    message: Cow::Owned(row.get(1)),
                 });
             }
-            items.sort_by(|it, next| it.message.cmp(&next.message));
 
-            let mut body = BytesMut::with_capacity(2048);
-            let _ = write!(Writer(&mut body), "{}", FortunesTemplate { fortunes: items.as_ref() });
+            fortunes.sort_by(|it, next| it.message.cmp(&next.message));
 
-            Ok(body.freeze())
+            let mut buf = BytesMut::with_capacity(2048);
+            ywrite_html!(buf, "{{> fortune }}");
+
+            Ok(buf.freeze())
         }
     }
 }
